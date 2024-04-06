@@ -1,9 +1,12 @@
+import { Suspense } from "react";
 import { Counter } from "./compo";
 
 export default function Home() {
   return (
     <div>
-      <Counter />
+      <Suspense>
+        <Counter />
+      </Suspense>
     </div>
   );
 }
