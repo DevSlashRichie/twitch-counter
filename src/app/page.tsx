@@ -1,9 +1,10 @@
-
+import { Counter } from "./compo";
 
 export default function Home() {
   return (
     <div>
-      akjsfgjflkjsdlk
+      <Counter />
+      
     </div>
   );
 }
