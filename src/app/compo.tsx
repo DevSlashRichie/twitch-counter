@@ -63,6 +63,9 @@ export function Counter() {
 
   const query = useSearchParams();
 
+
+  const isProd = query.get("prod") === "true";
+
   const {} = useWebSocket(
     process.env.NODE_ENV === "production"
       ? "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=60"
@@ -82,7 +85,7 @@ export function Counter() {
               "channel.cheer",
             ].map(async (type) => {
               axios.post(
-                process.env.NODE_ENV === "production"
+                isProd
                   ? "https://api.twitch.tv/helix/eventsub/subscriptions"
                   : "http://localhost:8080/eventsub/subscriptions",
                 {
@@ -252,7 +255,7 @@ export function Counter() {
 
   return (
     <main>
-      <h1 className="text-8xl">
+      <h1 className="text-8xl text-white">
         {typeof time === "number" && createNiceTimer(time)}
         {time === null && "Cargando..."}
       </h1>
