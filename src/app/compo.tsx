@@ -55,7 +55,6 @@ const updateDb = async (time: number) => {
 };
 
 export function Counter() {
-
   const [multiplier, setMultiplier] = useState<number>(1);
   const [time, setTimer] = useState<number | null>(0);
 
@@ -63,11 +62,10 @@ export function Counter() {
 
   const query = useSearchParams();
 
-
   const isProd = query.get("prod") === "true";
 
   const {} = useWebSocket(
-    process.env.NODE_ENV === "production"
+    isProd
       ? "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=60"
       : "ws://127.0.0.1:8080/ws",
     {
