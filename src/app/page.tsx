@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import useWebSocket from "react-use-websocket";
 import axios from "axios";
 import { supabase } from "@/utils";
+import { useSearchParams } from "next/navigation";
 
 const REWARDS_DICT_SECONDS = {
   cheer: 2.4,
@@ -59,6 +60,8 @@ export default function Home() {
 
   const preventOverLoad = useRef<number>(2);
 
+  const query = useSearchParams();
+
   const {} = useWebSocket(
     process.env.NODE_ENV === "production"
       ? "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=60"
@@ -95,8 +98,8 @@ export default function Home() {
                 },
                 {
                   headers: {
-                    Authorization: `Bearer ${process.env.NEXT_PUBLIC_TWITCH_TOKEN}`,
-                    "Client-Id": process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID,
+                    Authorization: `Bearer ${query.get("token")}`,
+                    "Client-Id": query.get("client_id"),
                     "Content-Type": "application/json",
                   },
                 },
