@@ -7,7 +7,7 @@ import { supabase } from "@/utils";
 import { useSearchParams } from "next/navigation";
 
 const REWARDS_DICT_SECONDS = {
-  cheer: 2.4,
+  cheer: 3,
   follow: 30,
   "subscribe.0": 300,
   "subscribe.1": 300,
@@ -91,7 +91,7 @@ export function Counter() {
                   type,
                   version: "1",
                   condition: {
-                    broadcaster_user_id: process.env.NEXT_PUBLIC_TWITCH_USER_ID,
+                    broadcaster_user_id: query.get("broadcaster_id"),
                   },
                   transport: {
                     method: "websocket",
@@ -253,7 +253,7 @@ export function Counter() {
 
   return (
     <main>
-      <h1 className="text-8xl text-white">
+      <h1 className="text-8xl">
         {typeof time === "number" && createNiceTimer(time)}
         {time === null && "Cargando..."}
       </h1>
