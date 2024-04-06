@@ -269,7 +269,7 @@ export function Counter() {
         {typeof time === "number" && createNiceTimer(time)}
         {time === null && "Cargando..."}
       </h1>
-      <h2>Multiplier: {multiplier}x</h2>
+      <h2 className="text-3xl">Multiplier: {multiplier}x</h2>
     </main>
   );
 }
