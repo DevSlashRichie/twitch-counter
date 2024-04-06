@@ -9,9 +9,16 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.42.0",
+    "@uidotdev/usehooks": "^2.4.1",
+    "axios": "^1.6.8",
+    "immer": "^10.0.4",
+    "next": "14.1.4",
     "react": "^18",
     "react-dom": "^18",
-    "next": "14.1.4"
+    "react-use-websocket": "^4.8.1",
+    "use-immer": "^0.9.0",
+    "usewebsocketio": "^4.3.0"
   },
   "devDependencies": {
     "typescript": "^5",

@@ -1,113 +1,257 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import useWebSocket from "react-use-websocket";
+import axios from "axios";
+import { supabase } from "@/utils";
+
+const REWARDS_DICT_SECONDS = {
+  cheer: 2.4,
+  follow: 30,
+  "subscribe.0": 300,
+  "subscribe.1": 300,
+  "subscribe.2": 600,
+  "subscribe.3": 900,
+} as Record<string, number>;
+
+function createNiceTimer(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+}
+
+function processCheerEvent(cheerAmount: number): number {
+  const reward = REWARDS_DICT_SECONDS["cheer"];
+  return cheerAmount * reward;
+}
+
+function processFollowEvent(): number {
+  return REWARDS_DICT_SECONDS["follow"];
+}
+
+function processSubscribeEvent(subTier: number, amount = 1): number {
+  return REWARDS_DICT_SECONDS[`subscribe.${subTier}`] * amount;
+}
+
+function normalizeTier(tier: string): number {
+  return Number(tier) / 1000 || 1;
+}
+
+const updateDb = async (time: number) => {
+  const firstRecord = await supabase.from("time").select();
+
+  if (!firstRecord.data?.length) {
+    void supabase.from("time").insert({ time }).then();
+  } else {
+    void supabase
+      .from("time")
+      .update({ time })
+      .eq("id", firstRecord.data[0].id)
+      .then();
+  }
+};
 
 export default function Home() {
+  const [multiplier, setMultiplier] = useState<number>(1);
+  const [time, setTimer] = useState<number | null>(0);
+
+  const preventOverLoad = useRef<number>(2);
+
+  const {} = useWebSocket(
+    process.env.NODE_ENV === "production"
+      ? "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=60"
+      : "ws://127.0.0.1:8080/ws",
+    {
+      share: true,
+      onMessage: (event) => {
+        const data = JSON.parse(event.data);
+        console.log(data);
+
+        if (data.metadata.message_type === "session_welcome") {
+          void Promise.all(
+            [
+              "channel.subscribe",
+              "channel.subscription.gift",
+              "channel.subscription.message",
+              "channel.cheer",
+            ].map(async (type) => {
+              axios.post(
+                process.env.NODE_ENV === "production"
+                  ? "https://api.twitch.tv/helix/eventsub/subscriptions"
+                  : "http://localhost:8080/eventsub/subscriptions",
+                {
+                  //type: "channel.subscribe channel.subscription.gift channel.subscription.message channel.cheer",
+                  type,
+                  version: "1",
+                  condition: {
+                    broadcaster_user_id: process.env.NEXT_PUBLIC_TWITCH_USER_ID,
+                  },
+                  transport: {
+                    method: "websocket",
+                    session_id: data.payload.session.id,
+                  },
+                },
+                {
+                  headers: {
+                    Authorization: `Bearer ${process.env.NEXT_PUBLIC_TWITCH_TOKEN}`,
+                    "Client-Id": process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID,
+                    "Content-Type": "application/json",
+                  },
+                },
+              );
+            }),
+          ).then();
+        } else if (data.metadata.message_type === "notification") {
+          switch (data.metadata.subscription_type) {
+            case "channel.cheer":
+              const cheerAmount = data.payload.event.bits as number;
+              const reward = processCheerEvent(cheerAmount);
+              handleAddTime(reward);
+              break;
+
+            case "channel.follow":
+              const rewardFollow = processFollowEvent();
+              handleAddTime(rewardFollow);
+              break;
+
+            case "channel.subscribe":
+              if (data.payload.event.is_gift) {
+                return;
+              }
+
+              const tier = data.payload.event.tier as string;
+
+              const normalized = normalizeTier(tier);
+
+              const rewardSubscribe = processSubscribeEvent(normalized);
+              handleAddTime(rewardSubscribe);
+              break;
+            case "channel.subscription.gift":
+              const amount = data.payload.event.total as number;
+              const normalizedTier = normalizeTier(
+                data.payload.event.tier as string,
+              );
+
+              const rewardSubscribeGift = processSubscribeEvent(
+                normalizedTier,
+                amount,
+              );
+              handleAddTime(rewardSubscribeGift);
+              break;
+            case "channel.subscription.message":
+              const normalizedTierMessage = normalizeTier(
+                data.payload.event.tier as string,
+              );
+
+              const rewardSubscribeMessage = processSubscribeEvent(
+                normalizedTierMessage,
+              );
+              handleAddTime(rewardSubscribeMessage);
+              break;
+          }
+        }
+      },
+    },
+  );
+
+  useEffect(() => {
+    supabase
+      .from("time")
+      .select()
+      .then(({ data }) => {
+        if (data)
+          setTimer(() => {
+            return data[0].time;
+          });
+      });
+  }, []);
+
+  const updateCache = (time: number) => {
+    if (
+      typeof time !== "number" ||
+      time % 5 !== 0 ||
+      preventOverLoad.current !== 0
+    )
+      return;
+
+    void updateDb(time).then();
+
+    preventOverLoad.current = 2;
+  };
+
+  useEffect(() => {
+    if (!time) {
+      if (time === 0) updateCache(time);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setTimer((prev) => {
+        const newTime = (prev || 0) - 1;
+        updateCache(newTime);
+        return newTime;
+      });
+
+      preventOverLoad.current = Math.max(0, preventOverLoad.current - 1);
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [time]);
+
+  const handleAddTime = useCallback(
+    (seconds: number) => {
+      setTimer((prev) => {
+        const isNegative = seconds < 0;
+        const n = Math.max(
+          0,
+          (prev ?? 0) + seconds * (isNegative ? 1 : multiplier),
+        );
+        void updateDb(n).then();
+        return n;
+      });
+    },
+    [multiplier],
+  );
+
+  useEffect(() => {
+    // listen for db updates
+
+    const u = supabase
+      .channel("schema-db-changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+        },
+        (payload) => {
+          if (payload.table === "stripe-to-update") {
+            if (payload.new.operation === "remove") {
+              handleAddTime(-payload.new.timeToUpdateAtDb);
+              return;
+            } else {
+              handleAddTime(payload.new.timeToUpdateAtDb);
+            }
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      u.unsubscribe();
+    };
+  }, [handleAddTime]);
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-full sm:before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full sm:after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50 text-balance`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
+    <main>
+      <h1 className="text-8xl">
+        {typeof time === "number" && createNiceTimer(time)}
+        {time === null && "Cargando..."}
+      </h1>
     </main>
   );
 }
