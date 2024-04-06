@@ -5,6 +5,7 @@ import useWebSocket from "react-use-websocket";
 import axios from "axios";
 import { supabase } from "@/utils";
 import { useSearchParams } from "next/navigation";
+import { Unkempt } from "next/font/google";
 
 const REWARDS_DICT_SECONDS = {
   cheer: 3,
@@ -211,9 +212,8 @@ export function Counter() {
     (seconds: number) => {
       setTimer((prev) => {
         const isNegative = seconds < 0;
-        const n = Math.max(
-          0,
-          (prev ?? 0) + seconds * (isNegative ? 1 : multiplier),
+        const n = Math.floor(
+          Math.max(0, (prev ?? 0) + seconds * (isNegative ? 1 : multiplier)),
         );
         void updateDb(n).then();
         return n;
@@ -230,17 +230,29 @@ export function Counter() {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
         },
         (payload) => {
-          if (payload.table === "stripe-to-update") {
+          if (
+            payload.table === "stripe-to-update" &&
+            payload.eventType === "INSERT"
+          ) {
             if (payload.new.operation === "remove") {
               handleAddTime(-payload.new.timeToUpdateAtDb);
               return;
             } else {
               handleAddTime(payload.new.timeToUpdateAtDb);
             }
+          }
+
+          if (
+            payload.table === "multiplier" &&
+            payload.eventType === "UPDATE"
+          ) {
+            setMultiplier(
+              (payload.new as unknown as { amount: number }).amount,
+            );
           }
         },
       )
@@ -257,6 +269,7 @@ export function Counter() {
         {typeof time === "number" && createNiceTimer(time)}
         {time === null && "Cargando..."}
       </h1>
+      <h2>Multiplier: {multiplier}x</h2>
     </main>
   );
 }
